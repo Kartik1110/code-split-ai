@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import * as globModule from "glob";
+import { CodeToken, CodeBlock, TokenizedFile, CodebaseIndex } from "./types";
 
 // Simple file finder utility
 function findFilesRecursively(
@@ -30,61 +30,6 @@ function findFilesRecursively(
 
   scan(dir);
   return results;
-}
-
-interface CodeToken {
-  value: string;
-  file: string;
-  lineNumber: number;
-  columnStart: number;
-  columnEnd: number;
-  context?: string;
-}
-
-interface CodeBlock {
-  type: "function" | "route" | "import" | "class" | "interface" | "middleware";
-  name: string;
-  startLine: number;
-  endLine: number;
-  content: string;
-  path?: string;
-  method?: string;
-  file: string;
-}
-
-interface TokenizedFile {
-  filePath: string;
-  tokens: CodeToken[];
-  lineCount: number;
-  functionLocations: {
-    name: string;
-    startLine: number;
-    endLine: number;
-    signature?: string;
-  }[];
-  routeDefinitions: {
-    path: string;
-    method: string;
-    handlerName: string;
-    lineNumber: number;
-  }[];
-  codeBlocks: CodeBlock[];
-}
-
-interface CodebaseIndex {
-  files: TokenizedFile[];
-  componentMap: Record<string, string>;
-  routeMap: Record<
-    string,
-    {
-      method: string;
-      path: string;
-      handler: string;
-      file: string;
-      line: number;
-    }
-  >;
-  blocksByType: Record<string, CodeBlock[]>;
 }
 
 /**
@@ -315,7 +260,16 @@ function indexCodebase(rootDir: string): CodebaseIndex {
 
   const tokenizedFiles: TokenizedFile[] = [];
   const componentMap: Record<string, string> = {};
-  const routeMap: Record<string, any> = {};
+  const routeMap: Record<
+    string,
+    {
+      method: string;
+      path: string;
+      handler: string;
+      file: string;
+      line: number;
+    }
+  > = {};
   const blocksByType: Record<string, CodeBlock[]> = {
     function: [],
     route: [],
