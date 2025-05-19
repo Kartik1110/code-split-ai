@@ -7,12 +7,19 @@ import {
   StopEvent,
   WorkflowEvent,
 } from "@llamaindex/workflow";
+import * as Sentry from "@sentry/node";
 import authRoutes from "./routes/auth.route";
+import errorRoutes from "./routes/error.route";
 import tokenizeCode from "./tokenizer";
 import generateCodebaseIndex from "./codeTokenizer";
 import fs from "fs";
 import path from "path";
-import { MetadataFilters, VectorStoreIndex, Document, storageContextFromDefaults } from "llamaindex";
+import {
+  MetadataFilters,
+  VectorStoreIndex,
+  Document,
+  storageContextFromDefaults,
+} from "llamaindex";
 import { ChromaVectorStore } from "@llamaindex/chroma";
 
 dotenv.config();
@@ -23,10 +30,17 @@ const llm = new OpenAI({
   model: "gpt-4o-mini",
   temperature: 1,
 });
-const collectionName = "code-data"
+const collectionName = "code-data";
 
 const app = express();
 const port = 3000;
+
+// Initialize Sentry
+Sentry.init({
+  dsn: process.env.SENTRY_DSN, // Get your DSN from https://sentry.io
+  // Performance Monitoring
+  tracesSampleRate: 1.0, // Capture 100% of transactions for performance monitoring
+});
 
 app.use(express.json());
 
@@ -34,33 +48,35 @@ app.use(express.json());
 async function connectChromaDb(collectionName: string) {
   const chromaVS = new ChromaVectorStore({ collectionName });
   const ctx = await storageContextFromDefaults({ vectorStore: chromaVS });
-  
+
   const storeCodeTokens = async (fileData: TokenizedFile) => {
     try {
       // Convert tokens and codeBlocks to Documents
       const docs = [
-        ...fileData.tokens.map((token, idx) => 
-          new Document({
-            id_: `${fileData.filePath}-token-${idx}`,
-            text: JSON.stringify(token),
-            metadata: {
-              filePath: fileData.filePath,
-              type: 'token',
-              lineCount: fileData.lineCount
-            }
-          })
+        ...fileData.tokens.map(
+          (token, idx) =>
+            new Document({
+              id_: `${fileData.filePath}-token-${idx}`,
+              text: JSON.stringify(token),
+              metadata: {
+                filePath: fileData.filePath,
+                type: "token",
+                lineCount: fileData.lineCount,
+              },
+            })
         ),
-        ...fileData.codeBlocks.map((block, idx) => 
-          new Document({
-            id_: `${fileData.filePath}-block-${idx}`,
-            text: JSON.stringify(block),
-            metadata: {
-              filePath: fileData.filePath,
-              type: 'codeBlock',
-              lineCount: fileData.lineCount
-            }
-          })
-        )
+        ...fileData.codeBlocks.map(
+          (block, idx) =>
+            new Document({
+              id_: `${fileData.filePath}-block-${idx}`,
+              text: JSON.stringify(block),
+              metadata: {
+                filePath: fileData.filePath,
+                type: "codeBlock",
+                lineCount: fileData.lineCount,
+              },
+            })
+        ),
       ];
 
       // Create index and store documents
@@ -82,8 +98,8 @@ async function connectChromaDb(collectionName: string) {
         preFilters: filters,
         similarityTopK: 10,
       });
-      const response = await queryEngine.query({ 
-        query: filters?.query || "List all code tokens" 
+      const response = await queryEngine.query({
+        query: "List all code tokens",
       });
       return response;
     } catch (error) {
@@ -96,28 +112,33 @@ async function connectChromaDb(collectionName: string) {
     vectorStore: chromaVS,
     storeCodeTokens,
     queryTokens,
-    queryFn: queryTokens
+    queryFn: queryTokens,
   };
 }
 
 // Initialize ChromaDB connection
 let chromaClient: Awaited<ReturnType<typeof connectChromaDb>>;
 
-app.get('/api/query', async (req, res) => {
+app.get("/api/query", async (req, res) => {
   try {
     if (!chromaClient) {
       chromaClient = await connectChromaDb(collectionName);
     }
-    const filters = req.query.filters ? JSON.parse(String(req.query.filters)) : undefined;
+    const filters = req.query.filters
+      ? JSON.parse(String(req.query.filters))
+      : undefined;
     const response = await chromaClient.queryFn(filters);
     res.json(response);
   } catch (error) {
-    res.status(500).json({ error: 'Error querying the database' });
+    res.status(500).json({ error: "Error querying the database" });
   }
 });
 
 // Add auth routes
 app.use("/api/auth", authRoutes);
+
+// Add error test routes for Sentry monitoring
+app.use("/api/error", errorRoutes);
 
 // Define interface for file data
 interface TokenizedFile {
@@ -163,14 +184,14 @@ async function loadCodebaseIndex() {
 }
 
 // Modify the API endpoint to support more complex filters
-app.get('/api/tokens', async (req: Request, res: Response) => {
+app.get("/api/tokens", async (req: Request, res: Response) => {
   try {
     if (!chromaClient) {
       chromaClient = await connectChromaDb(collectionName);
     }
 
     const filters: MetadataFilters = {
-      filters: []
+      filters: [],
     };
 
     // Add file path filter if provided
@@ -178,7 +199,7 @@ app.get('/api/tokens', async (req: Request, res: Response) => {
       filters.filters.push({
         key: "filePath",
         value: req.query.filePath as string,
-        operator: "=="
+        operator: "==",
       });
     }
 
@@ -187,7 +208,7 @@ app.get('/api/tokens', async (req: Request, res: Response) => {
       filters.filters.push({
         key: "type",
         value: req.query.type as string,
-        operator: "=="
+        operator: "==",
       });
     }
 
@@ -196,14 +217,11 @@ app.get('/api/tokens', async (req: Request, res: Response) => {
       filters.condition = "and";
     }
 
-    const response = await chromaClient.queryTokens({
-      ...filters,
-      query: req.query.query as string
-    });
+    const response = await chromaClient.queryTokens(filters);
 
     res.json(response);
   } catch (error) {
-    res.status(500).json({ error: 'Error querying tokens' });
+    res.status(500).json({ error: "Error querying tokens" });
   }
 });
 
@@ -239,7 +257,8 @@ const homeHandler = async (req: Request, res: Response) => {
 
 const codeQueryHandler = async (req: Request, res: Response) => {
   try {
-    const { query = "What is the main function in the index.ts file?" } = req.body;
+    const { query = "What is the main function in the index.ts file?" } =
+      req.body;
 
     if (!query) {
       return res.status(400).json({ error: "Query is required" });
@@ -281,8 +300,21 @@ ${codebaseIndex.markdown.slice(0, 15000)}
 app.get("/", homeHandler as RequestHandler);
 app.post("/api/code-query", codeQueryHandler as RequestHandler);
 
+// The error handler must be registered before any other error middleware and after all controllers
+app.use((err: any, req: Request, res: Response, next: any) => {
+  // Capture the error with Sentry
+  Sentry.captureException(err);
+  next(err);
+});
+
+// Optional fallthrough error handler
+app.use((err: any, req: Request, res: Response, next: any) => {
+  console.error("Unhandled error:", err);
+  res.status(500).send("Internal Server Error");
+});
+
 app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
-  console.log("Generating codebase index...");
+  console.log("Sentry integration is enabled for error monitoring");
   // generateCodebaseIndex();
 });

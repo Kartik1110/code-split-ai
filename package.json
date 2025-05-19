@@ -13,6 +13,8 @@
   "description": "",
   "dependencies": {
     "@llamaindex/chroma": "^0.0.13",
+    "@sentry/node": "^9.19.0",
+    "@sentry/profiling-node": "^9.19.0",
     "@types/express": "^5.0.1",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
